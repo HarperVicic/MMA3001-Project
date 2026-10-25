@@ -1,0 +1,12 @@
+item,value,unit
+"Original: 15-min trapezoidal rule, per-window loop: run time",5.177445721000026,s
+"Original: 15-min trapezoidal rule, per-window loop: windows",8298.0,windows
+"Final: 10-min step function, cumulative sums: run time",0.056848100000024715,s
+"Final: 10-min step function, cumulative sums: windows",13800.0,windows
+Final alignment: estimated operations,2222741.9676365973,operations
+Final alignment: estimated memory traffic,14985888.0,bytes
+Final alignment: arithmetic intensity,0.1483223394994409,operations/byte
+Polynomial Regression (Deg 2): operations per prediction,205.0,operations
+Random Forest: comparisons per prediction,1405.3175394846219,comparisons
+Gradient Boosting: comparisons per prediction,300.0,comparisons
+Random Forest (Tuned): comparisons per prediction,4235.972568578553,comparisons

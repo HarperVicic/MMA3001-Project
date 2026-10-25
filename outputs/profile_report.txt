@@ -1,0 +1,80 @@
+=== Project functions by cumulative time ===
+         61848879 function calls (60465621 primitive calls) in 96.102 seconds
+
+   Ordered by: cumulative time
+   List reduced from 5306 to 35 due to restriction <'occupancy_model'>
+   List reduced from 35 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000   34.623   34.623 occupancy_model.py:1425(performance_summary)
+        1    0.000    0.000   34.504   34.504 occupancy_model.py:1273(benchmark_alignment)
+        3    0.001    0.000   34.336   11.445 occupancy_model.py:1295(<lambda>)
+        3    0.316    0.105   34.335   11.445 occupancy_model.py:1219(original_trapezoid_alignment)
+    24894    0.318    0.000   30.199    0.001 occupancy_model.py:1259(trapezoid_average)
+        1    0.004    0.004   25.697   25.697 occupancy_model.py:984(split_sensitivity)
+    24494    0.613    0.000   19.704    0.001 occupancy_model.py:398(_to_seconds)
+        1    0.002    0.002    9.564    9.564 occupancy_model.py:1028(leave_one_feature_out)
+        1    0.083    0.083    5.803    5.803 occupancy_model.py:294(load_environmental)
+        1    0.000    0.000    4.092    4.092 occupancy_model.py:920(compare_models)
+        3    0.001    0.000    4.030    1.343 occupancy_model.py:879(measure_cost)
+        1    0.029    0.029    3.900    3.900 occupancy_model.py:193(load_occupancy)
+    29341    0.498    0.000    1.430    0.000 occupancy_model.py:248(parse_sensor_json)
+        1    0.003    0.003    1.349    1.349 occupancy_model.py:1143(predict_headcount)
+    13800    0.022    0.000    1.107    0.000 occupancy_model.py:1211(<lambda>)
+        4    0.008    0.002    0.233    0.058 occupancy_model.py:404(time_weighted_headcount)
+        1    0.000    0.000    0.181    0.181 occupancy_model.py:365(load_sensor_registry)
+        3    0.000    0.000    0.166    0.055 occupancy_model.py:1296(<lambda>)
+       42    0.001    0.000    0.122    0.003 occupancy_model.py:841(regression_metrics)
+        2    0.001    0.001    0.108    0.054 occupancy_model.py:1389(tree_comparisons_per_prediction)
+        1    0.000    0.000    0.073    0.073 occupancy_model.py:517(build_modelling_dataset)
+        1    0.000    0.000    0.035    0.035 occupancy_model.py:1081(rank_features)
+        8    0.004    0.001    0.013    0.002 occupancy_model.py:494(cumulative_at)
+        1    0.000    0.000    0.004    0.004 occupancy_model.py:582(split_dataset)
+        1    0.000    0.000    0.000    0.000 occupancy_model.py:962(select_final_model)
+        2    0.000    0.000    0.000    0.000 occupancy_model.py:151(resolve_data_file)
+        8    0.000    0.000    0.000    0.000 occupancy_model.py:144(_require_columns)
+        1    0.000    0.000    0.000    0.000 occupancy_model.py:673(make_random_forest)
+        1    0.000    0.000    0.000    0.000 occupancy_model.py:637(make_polynomial_model)
+        8    0.000    0.000    0.000    0.000 occupancy_model.py:1853(record)
+
+
+
+=== All functions by own (internal) time ===
+         61848879 function calls (60465621 primitive calls) in 96.102 seconds
+
+   Ordered by: internal time
+   List reduced from 5306 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+     4300   31.079    0.007   33.684    0.008 _classes.py:226(_fit)
+   248310    2.484    0.000    3.561    0.000 {built-in method builtins.next}
+10891234/10607331    2.455    0.000    3.931    0.000 {built-in method builtins.isinstance}
+        1    2.096    2.096    2.343    2.343 c_parser_wrapper.py:203(read)
+        6    1.328    0.221    1.328    0.221 datetimes.py:2578(objects_to_datetime64)
+123063/123058    1.181    0.000    8.162    0.000 series.py:369(__init__)
+       45    1.052    0.023    1.052    0.023 {method 'encode' of 'ImagingEncoder' objects}
+   1059/1    0.941    0.001    0.060    0.060 text.py:416(_get_layout)
+   220657    0.904    0.000    1.292    0.000 generic.py:6119(__finalize__)
+     4100    0.862    0.000    1.025    0.000 _classes.py:501(predict)
+2572962/1826527    0.699    0.000    0.993    0.000 {built-in method builtins.len}
+   123217    0.689    0.000    1.995    0.000 construction.py:531(sanitize_array)
+2650681/2648213    0.644    0.000    0.875    0.000 {built-in method builtins.getattr}
+     7869    0.613    0.000    0.637    0.000 _ufunc_config.py:496(inner)
+    24494    0.613    0.000   19.704    0.001 occupancy_model.py:398(_to_seconds)
+    12169    0.607    0.000    1.364    0.000 validation.py:1455(check_random_state)
+49803/24906    0.564    0.000    1.777    0.000 sorting.py:372(nargsort)
+   188651    0.563    0.000    0.592    0.000 datetimes.py:670(__iter__)
+    47388    0.547    0.000    2.642    0.000 generic.py:4296(_slice)
+  1007058    0.545    0.000    1.207    0.000 generic.py:43(_instancecheck)
+   310384    0.537    0.000    1.491    0.000 generic.py:6196(__setattr__)
+    29341    0.535    0.000    0.535    0.000 decoder.py:351(raw_decode)
+    74429    0.509    0.000    1.805    0.000 managers.py:1226(iget)
+   223442    0.502    0.000    1.276    0.000 _mixins.py:287(__getitem__)
+    29341    0.498    0.000    1.430    0.000 occupancy_model.py:248(parse_sensor_json)
+   270100    0.485    0.000    0.632    0.000 generic.py:258(__init__)
+    20348    0.452    0.000    1.578    0.000 inspect.py:2403(_signature_from_function)
+  2595873    0.439    0.000    0.439    0.000 {method 'get' of 'dict' objects}
+  1007058    0.422    0.000    0.609    0.000 generic.py:38(_check)
+    49052    0.399    0.000    0.778    0.000 base.py:567(to_numpy)
+
+

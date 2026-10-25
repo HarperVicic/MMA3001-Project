@@ -1,0 +1,10 @@
+stage,time_s
+Load and parse data,8.09509436999997
+Align and split,0.05563509700004943
+Train baseline and alternative models,1.2504591119999304
+Tune Random Forest,172.18403031000003
+Compare models (including repeated timing runs),7.117330562999996
+Performance analysis,15.812593065999977
+Sensitivity analyses and ranking,37.007891396000105
+Predict headcount,0.9237271529998452
+Figures,5.010121693000201
