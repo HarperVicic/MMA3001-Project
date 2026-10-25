@@ -25,14 +25,15 @@ Smart buildings need occupancy information to control ventilation, thermal comfo
 
 ```
 MMA3001-Project/
-├── DATA/                      Input data (not committed; see DATA/README.md)
+├── DATA/                      Zipped input data and sensor registry (see DATA/README.md)
 ├── Jupyter Notebooks/
 │   └── Occupancy_Modelling.ipynb   Step-by-step analysis with explanations
 ├── src/
 │   └── occupancy_model.py     All functions plus a command-line pipeline
 ├── docs/                      HTML documentation (generated with pdoc)
 ├── outputs/                   Result tables (CSV) and figures (PNG)
-├── tests/                     Tests
+├── report/                    Project report (Word document)
+├── tests/                     pytest tests (test_occupancy_model.py, conftest.py) and test report
 ├── requirements.txt           Python dependencies
 ├── LICENSE
 └── README.md
@@ -60,7 +61,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Then place the three data files in `DATA/` (see `DATA/README.md`).
+The data is included in `DATA/` as zipped CSVs, which the code reads directly. Unzipping them in place makes loading faster but is not required (see `DATA/README.md`).
 
 ## Usage
 
@@ -70,6 +71,7 @@ Then place the three data files in `DATA/` (see `DATA/README.md`).
 python src/occupancy_model.py
 python src/occupancy_model.py --no-tune      # skip Random Forest tuning (about 1 minute)
 python src/occupancy_model.py --data-dir DATA --output-dir outputs
+python src/occupancy_model.py --no-tune --profile   # also profile the run with cProfile
 ```
 
 **Step through the analysis** in `Jupyter Notebooks/Occupancy_Modelling.ipynb` (select the `.venv` kernel and Run All).
@@ -89,7 +91,12 @@ from occupancy_model import load_occupancy, load_environmental, build_modelling_
 | `outputs/model_performance_metrics.csv` | RMSE, MAE and R² for every model (the script also records training time, prediction time and model size) |
 | `outputs/sensitivity_analysis_results.csv` | Change in RMSE, MAE and R² when each variable is removed |
 | `outputs/feature_importance_ranking.csv` | Variables ranked by sensitivity, model importance and correlation |
-| `outputs/figures/` | Time series, correlation heatmap, polynomial fit, sensitivity analysis, predicted headcount |
+| `outputs/split_sensitivity_results.csv` | Accuracy of the final model across test sizes and random seeds |
+| `outputs/rf_tuning_cv_results.csv` | Cross-validated RMSE for every Random Forest setting tried |
+| `outputs/performance_summary.csv` | Alignment run time (final vs original method), estimated operations, arithmetic intensity and operations per prediction for each model |
+| `outputs/stage_timings.csv` | Run time of each pipeline stage |
+| `outputs/profile_report.txt` | cProfile report (from `--no-tune --profile`) |
+| `outputs/figures/` | Time series, correlation heatmap, polynomial fit, predicted vs actual, tree convergence, sensitivity analysis, predicted headcount |
 
 ## Documentation
 
@@ -101,11 +108,17 @@ pdoc src/occupancy_model.py --docformat numpy -o docs
 
 ## Testing
 
-The docstring examples can be run as tests:
+The tests in `tests/` use small synthetic datasets with known answers, so they run in seconds without the project data. They cover data loading and invalid inputs, the time-weighted averaging (including a hand-calculated case and a second-by-second brute-force check), the models, evaluation, sensitivity analysis, prediction flags and the performance functions. Run from the repository root:
 
 ```
-python -m doctest -v src/occupancy_model.py
+pytest                                                          # run all tests
+pytest --html=tests/test_report.html --self-contained-html      # HTML test report
+python -m doctest -v src/occupancy_model.py                     # docstring examples
 ```
+
+## Performance analysis
+
+`performance_summary.csv` compares the final alignment method with the original draft method and estimates the arithmetic work involved. The final method computes all 13,800 window averages in about 0.06 s, against about 5 s for the original per-window method (for 8,298 windows). It performs about 2.2 million operations with an arithmetic intensity of about 0.15 operations per byte, so it is limited by memory access rather than processor speed. Profiling (`--profile`) shows that most of the original method's time is spent converting timestamps window by window, which is interpreter overhead rather than arithmetic. One prediction costs about 205 operations for the polynomial, 300 comparisons for Gradient Boosting and 4,200 comparisons for the tuned Random Forest. Random Forest tuning accounts for about 70% of the total run time (`stage_timings.csv`).
 
 ## Limitations
 
@@ -116,17 +129,11 @@ python -m doctest -v src/occupancy_model.py
 * Over half of the readings without a measured headcount fall outside the training range (mainly formaldehyde), where the model cannot extrapolate.
 
 ## Summary of AI Usage in Project
-This project will utilize AI tools, specifically Google Gemini (via Colab integration, 'Gemini-2.5-Flash', July-October 2026) and Microsoft Copilot (web interface, July-October 2026), to assist across various project phases. Gemini will primarily support code generation, debugging, and conceptual explanations, while Copilot will aid in refining written documentation and report structuring.
 
-All AI-generated content, including code and text, will undergo thorough human review, validation, and adaptation to ensure accuracy, efficiency, and alignment with project requirements. The author will maintain full oversight and responsibility for all final decisions, implementations, and conclusions, ensuring the ethical and professional standards expected in engineering are met.
+AI tools were used throughout the project. All AI-generated code and text was run, checked and adapted by the author, who remained responsible for every decision, implementation and conclusion. The full AI-use reflection is Section 10 of the report, and Appendix D of the report is a log of the main sessions.
 
-### Claude (Anthropic)
+* **Microsoft Copilot** (desktop app, July–October 2026): used to plan the modelling pipeline against the brief, to discuss the model output (the author chose a headcount rather than an occupancy status, making this a regression problem), and to draft the repository licence (the author chose a restrictive academic licence over the suggested MIT licence).
+* **Google Gemini** (Gemini 3.5 Flash and 3.1 Pro, through Google Colab, July–October 2026): used to generate the code for the draft Jupyter notebook from the author's prompts, to improve and optimise the initial pipeline, and to compare the work against the MMA3001 brief and criteria.
+* **Claude** (Anthropic, Claude desktop app, October 2026): used to investigate the datasets (identifying the upload-time vs measurement-time issue, the frozen sensors, the truncated occupancy export and the mixing of five rooms into one time series); to implement the 10-minute time-weighted alignment, the Random Forest tuning and the outputs; to restructure the code into documented functions (`src/occupancy_model.py`) with tests and performance analysis; to set up this repository and README; and to draft the project report (all sections apart from the parts marked for the author to write), which the author reviewed and edited.
 
-Claude (Anthropic, via the Claude desktop app, October 2026) was also used during the project, for:
-
-* investigating the datasets (identifying the upload-time vs measurement-time issue, the frozen sensors, the truncated occupancy export and the mixing of five rooms into one time series);
-* restructuring the notebook code into documented functions (`src/occupancy_model.py`) and writing docstrings;
-* implementing the 10-minute time-weighted alignment, the Random Forest tuning and the project outputs section;
-* setting up the repository structure and this README.
-
-All Claude-generated code was run and checked against the notebook results, and the author made the modelling decisions (choice of room and sensor, variables, baseline and final model).
+All AI-generated code was run and checked against the results, and the author made the modelling decisions (choice of room and sensor, variables, baseline and final model).

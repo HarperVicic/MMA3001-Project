@@ -1,13 +1,11 @@
 # Data
 
-The raw data files are **not stored in this repository**: the two CSV files exceed GitHub's 100 MB file limit, and the building sensor data is not ours to publish.
-
-To run the project, place these three files in this `DATA/` folder:
+The two large CSV files exceed GitHub's 100 MB file limit, so they are stored here as **zipped copies** (`*.csv.zip`, about 15 MB in total). The code reads the zips directly; if you unzip them in this folder, the uncompressed CSVs are used instead (faster to load) and are ignored by Git. The sensor registry is small and stored as it is.
 
 | File | Size | Contents |
 |---|---|---|
-| `5occupancySensor_MayToDec2024_9MRows.csv` | ~171 MB | Occupancy events: one row per headcount change, all rooms (`floorspaceid`, `headcount`, `collecteddate`, ...) |
-| `5EnvSensor_MayToDec2024_180kRows.csv` | ~353 MB | Environmental sensor records: readings stored as JSON in the `jsondata` column (CO2, temperature, humidity, pressure, formaldehyde, VOCs, particulate matter, battery) |
+| `5occupancySensor_MayToDec2024_9MRows.csv.zip` | ~8.5 MB (171 MB unzipped) | Occupancy events: one row per headcount change, all rooms (`floorspaceid`, `headcount`, `collecteddate`, ...) |
+| `5EnvSensor_MayToDec2024_180kRows.csv.zip` | ~6.6 MB (353 MB unzipped) | Environmental sensor records: readings stored as JSON in the `jsondata` column (CO2, temperature, humidity, pressure, formaldehyde, VOCs, particulate matter, battery) |
 | `Sensor ID and Locations.xlsx` | ~19 KB | Registry mapping environmental sensor IDs to building, room and area |
 
 The datasets were provided for the MMA3001 project. Contact the unit's teaching team for access.

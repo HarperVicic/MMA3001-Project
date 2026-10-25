@@ -1,17 +1,17 @@
 # Python virtual environment
 .venv/
 
-# Raw data files: too large for GitHub (over the 100 MB limit) and not ours to publish.
-# See DATA/README.md for how to obtain them.
-DATA/*
-!DATA/README.md
+# Raw data: the uncompressed CSVs exceed GitHub's 100 MB limit, so only the
+# zipped copies (*.csv.zip) and the small sensor registry are committed.
+DATA/*.csv
 
-# Python and Jupyter caches
+# Python, Jupyter and test caches
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
 .pytest_cache/
 
-# OS and editor files
+# Word lock files and OS/editor files
+~$*
 .DS_Store
 Thumbs.db
