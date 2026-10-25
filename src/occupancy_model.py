@@ -21,6 +21,12 @@ Pipeline
    leave-one-feature-out) and rank the environmental variables.
 7. Predict headcount for every environmental reading and save all tables and
    figures to the output folder.
+8. Measure performance: time the alignment against the original draft method,
+   estimate floating-point operations and arithmetic intensity, and (with
+   ``--profile``) profile the whole pipeline with cProfile.
+
+The data files may be stored as CSVs or as zipped CSVs (``*.csv.zip``); the
+zipped copy is used automatically when the CSV is not present.
 
 Usage
 -----
@@ -28,6 +34,7 @@ From the project root::
 
     python src/occupancy_model.py
     python src/occupancy_model.py --data-dir DATA --output-dir outputs
+    python src/occupancy_model.py --no-tune --profile
 
 The functions can also be imported, for example from a notebook::
 
@@ -37,9 +44,12 @@ The functions can also be imported, for example from a notebook::
 from __future__ import annotations
 
 import argparse
+import cProfile
 import json
 import logging
+import math
 import pickle
+import pstats
 import time
 from pathlib import Path
 
@@ -138,6 +148,44 @@ def _require_columns(df: pd.DataFrame, columns: list[str], name: str) -> None:
         raise ValueError(f"{name} is missing columns: {missing}")
 
 
+def resolve_data_file(path: str | Path) -> Path:
+    """
+    Return the path of a data file, falling back to its zipped copy.
+
+    The large CSV files are stored in the repository as single-file zip
+    archives (``name.csv.zip``) because they exceed GitHub's file-size limit.
+    pandas reads either form directly, so the uncompressed file is used when it
+    is present (faster) and the zip is used otherwise.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        Path of the uncompressed file, e.g. ``DATA/name.csv``.
+
+    Returns
+    -------
+    pathlib.Path
+        ``path`` if it exists, otherwise ``path`` with ``.zip`` appended.
+
+    Raises
+    ------
+    FileNotFoundError
+        If neither the file nor its zipped copy exists.
+
+    Examples
+    --------
+    >>> resolve_data_file("DATA/5EnvSensor_MayToDec2024_180kRows.csv")  # doctest: +SKIP
+    PosixPath('DATA/5EnvSensor_MayToDec2024_180kRows.csv.zip')
+    """
+    path = Path(path)
+    if path.exists():
+        return path
+    zipped = path.with_name(path.name + ".zip")
+    if zipped.exists():
+        return zipped
+    raise FileNotFoundError(f"Data file not found: {path} (or {zipped.name})")
+
+
 # ---------------------------------------------------------------------------
 # 1. Data loading
 # ---------------------------------------------------------------------------
@@ -153,7 +201,8 @@ def load_occupancy(path: str | Path, room_id: str = ROOM_ID) -> pd.DataFrame:
     Parameters
     ----------
     path : str or pathlib.Path
-        Path to the occupancy CSV. Must contain the columns ``floorspaceid``,
+        Path to the occupancy CSV (or its zipped copy, see
+        :func:`resolve_data_file`). Must contain the columns ``floorspaceid``,
         ``headcount`` and ``collecteddate``.
     room_id : str, optional
         ``floorspaceid`` of the room to keep. Defaults to ``ROOM_ID``.
@@ -169,7 +218,7 @@ def load_occupancy(path: str | Path, room_id: str = ROOM_ID) -> pd.DataFrame:
     Raises
     ------
     FileNotFoundError
-        If ``path`` does not exist.
+        If neither ``path`` nor its zipped copy exists.
     ValueError
         If required columns are missing or the room has no valid rows.
 
@@ -179,9 +228,7 @@ def load_occupancy(path: str | Path, room_id: str = ROOM_ID) -> pd.DataFrame:
     >>> occ.columns.tolist()  # doctest: +SKIP
     ['collecteddate', 'headcount']
     """
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(f"Occupancy file not found: {path}")
+    path = resolve_data_file(path)  # raises FileNotFoundError if neither CSV nor zip exists
 
     df = pd.read_csv(path, on_bad_lines="skip", low_memory=False)
     _require_columns(df, ["floorspaceid", "headcount", "collecteddate"], "Occupancy file")
@@ -260,7 +307,8 @@ def load_environmental(
     Parameters
     ----------
     path : str or pathlib.Path
-        Path to the environmental CSV. Must contain ``sensorid`` and ``jsondata``.
+        Path to the environmental CSV (or its zipped copy, see
+        :func:`resolve_data_file`). Must contain ``sensorid`` and ``jsondata``.
     sensor_id : int, optional
         Sensor to keep. Defaults to ``ENV_SENSOR_ID`` (6012002000869).
     exclude : tuple of str, optional
@@ -278,7 +326,7 @@ def load_environmental(
     Raises
     ------
     FileNotFoundError
-        If ``path`` does not exist.
+        If neither ``path`` nor its zipped copy exists.
     ValueError
         If required columns are missing or the sensor has no readings.
 
@@ -289,9 +337,7 @@ def load_environmental(
                     measuredate  Carbon dioxide
     0 2024-02-29 06:04:56+00:00           465.0
     """
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(f"Environmental file not found: {path}")
+    path = resolve_data_file(path)  # raises FileNotFoundError if neither CSV nor zip exists
 
     df = pd.read_csv(path, usecols=["sensorid", "jsondata"], on_bad_lines="skip", engine="python")
     df = df[df["sensorid"] == sensor_id]
@@ -1167,7 +1213,301 @@ def predict_headcount(
 
 
 # ---------------------------------------------------------------------------
-# 5. Visualisation
+# 5. Performance analysis
+# ---------------------------------------------------------------------------
+
+def original_trapezoid_alignment(occupancy: pd.DataFrame, window: str = "15min") -> pd.Series:
+    """
+    Original draft averaging method, kept only as a performance baseline.
+
+    Groups the occupancy events into fixed windows and, for each window in
+    turn, integrates headcount with the trapezoidal rule and divides by the
+    time between the first and last reading. This is how the initial draft
+    notebook averaged headcount; it is slower than
+    :func:`time_weighted_headcount` because it loops over windows in Python,
+    and less accurate because headcount is a step function, not a linear one.
+
+    Parameters
+    ----------
+    occupancy : pandas.DataFrame
+        Output of :func:`load_occupancy` (``collecteddate``, ``headcount``).
+    window : str, optional
+        Window length as a pandas frequency string. Defaults to ``"15min"``
+        (the draft's setting).
+
+    Returns
+    -------
+    pandas.Series
+        Average headcount per window, indexed by window start time. Windows
+        with no readings are omitted.
+
+    Raises
+    ------
+    ValueError
+        If ``occupancy`` is missing its required columns.
+
+    Examples
+    --------
+    >>> occ = pd.DataFrame({"collecteddate": pd.to_datetime(["2024-03-01 09:00", "2024-03-01 09:10"], utc=True),
+    ...                     "headcount": [2.0, 4.0]})
+    >>> float(original_trapezoid_alignment(occ).iloc[0])
+    3.0
+    """
+    _require_columns(occupancy, ["collecteddate", "headcount"], "occupancy")
+    integrate = getattr(np, "trapezoid", None) or np.trapz  # NumPy 2 renamed trapz
+
+    def trapezoid_average(group: pd.DataFrame) -> float:
+        group = group.sort_values("collecteddate")
+        if len(group) < 2:
+            return float(group["headcount"].mean())
+        x = _to_seconds(group["collecteddate"])
+        y = group["headcount"].to_numpy(dtype=float)
+        span = x[-1] - x[0]
+        return float(y.mean()) if span == 0 else float(integrate(y, x) / span)
+
+    grouped = occupancy.groupby(pd.Grouper(key="collecteddate", freq=window))
+    averages = {start: trapezoid_average(g) for start, g in grouped if len(g)}
+    return pd.Series(averages, name="avg_headcount")
+
+
+def benchmark_alignment(occupancy: pd.DataFrame, environment: pd.DataFrame, repeats: int = 3) -> pd.DataFrame:
+    """
+    Time the final alignment method against the original draft method.
+
+    Parameters
+    ----------
+    occupancy : pandas.DataFrame
+        Output of :func:`load_occupancy`.
+    environment : pandas.DataFrame
+        Output of :func:`load_environmental` (its ``measuredate`` values are the
+        window end times for the final method).
+    repeats : int, optional
+        Number of timed runs per method; the median is reported. Defaults to 3.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per method with ``method``, ``windows`` (number of averages
+        produced), ``median_time_s`` and ``time_per_window_us`` (microseconds).
+    """
+    rows = []
+    methods = {
+        "Original: 15-min trapezoidal rule, per-window loop": lambda: original_trapezoid_alignment(occupancy),
+        "Final: 10-min step function, cumulative sums": lambda: time_weighted_headcount(
+            occupancy["collecteddate"], occupancy["headcount"], environment["measuredate"]),
+    }
+    for name, run in methods.items():
+        times = []
+        for _ in range(repeats):
+            t0 = time.perf_counter()
+            result = run()
+            times.append(time.perf_counter() - t0)
+        median = float(np.median(times))
+        rows.append({"method": name, "windows": len(result), "median_time_s": median,
+                     "time_per_window_us": median / len(result) * 1e6})
+    return pd.DataFrame(rows)
+
+
+def alignment_flop_estimate(n_readings: int, n_windows: int) -> dict[str, float]:
+    """
+    Estimate the arithmetic work and memory traffic of :func:`time_weighted_headcount`.
+
+    Operation counts (floating-point arithmetic and comparisons):
+
+    - per occupancy reading: one subtraction (segment length), one comparison
+      (gap check), one multiplication (area) and two additions (cumulative
+      sums of area and time): about 5 operations;
+    - per window: two binary searches of about log2(n) comparisons each, about
+      8 operations to evaluate each partial segment, then a subtraction,
+      a comparison and a division: about 2 log2(n) + 20 operations.
+
+    Memory traffic is estimated from the float64 arrays read and written:
+    about 6 arrays (48 bytes) per reading and 10 arrays (80 bytes) per window.
+
+    Parameters
+    ----------
+    n_readings : int
+        Number of occupancy readings (after merging duplicate timestamps).
+    n_windows : int
+        Number of averaging windows (environmental readings).
+
+    Returns
+    -------
+    dict
+        ``flops`` (operations), ``bytes`` (memory traffic) and
+        ``arithmetic_intensity`` (operations per byte). An intensity well below
+        about 10 operations per byte means the calculation is limited by memory
+        bandwidth rather than processor speed.
+
+    Raises
+    ------
+    ValueError
+        If ``n_readings`` < 2 or ``n_windows`` < 1.
+
+    Examples
+    --------
+    >>> est = alignment_flop_estimate(1024, 100)
+    >>> int(est["flops"])
+    9120
+    """
+    if n_readings < 2 or n_windows < 1:
+        raise ValueError("need at least 2 readings and 1 window")
+    flops = 5 * n_readings + n_windows * (2 * math.log2(n_readings) + 20)
+    n_bytes = 48 * n_readings + 80 * n_windows
+    return {"flops": float(flops), "bytes": float(n_bytes), "arithmetic_intensity": flops / n_bytes}
+
+
+def polynomial_flops_per_prediction(n_features: int, degree: int = 2) -> int:
+    """
+    Floating-point operations for one prediction of :func:`make_polynomial_model`.
+
+    Standardising costs 2 operations per feature; each polynomial term beyond
+    the linear ones needs one multiplication to build; evaluating the linear
+    model costs one multiplication and one addition per term.
+
+    Parameters
+    ----------
+    n_features : int
+        Number of input features.
+    degree : int, optional
+        Polynomial degree. Defaults to 2.
+
+    Returns
+    -------
+    int
+        Operations per prediction.
+
+    Examples
+    --------
+    >>> polynomial_flops_per_prediction(10)  # 20 + 55 + 130
+    205
+    """
+    n_terms = math.comb(n_features + degree, degree) - 1  # excludes the bias term
+    return 2 * n_features + (n_terms - n_features) + 2 * n_terms
+
+
+def tree_comparisons_per_prediction(model, X: pd.DataFrame) -> float:
+    """
+    Average number of split comparisons a tree ensemble makes per prediction.
+
+    Counts the decision nodes visited in every tree for every row of ``X`` and
+    divides by the number of rows. Each visited decision node is one
+    floating-point comparison; the leaf values are then averaged (Random
+    Forest) or summed (Gradient Boosting), adding one operation per tree.
+
+    Parameters
+    ----------
+    model : sklearn.ensemble.RandomForestRegressor or GradientBoostingRegressor
+        A fitted tree ensemble.
+    X : pandas.DataFrame
+        Input readings to trace through the trees.
+
+    Returns
+    -------
+    float
+        Mean comparisons per prediction, summed over all trees.
+
+    Raises
+    ------
+    TypeError
+        If ``model`` is not a fitted tree ensemble.
+    """
+    if not hasattr(model, "estimators_"):
+        raise TypeError("model must be a fitted tree ensemble")
+    values = X.to_numpy(dtype=np.float32)
+    total = 0
+    for tree in np.ravel(model.estimators_):
+        visited = tree.decision_path(values).sum()
+        total += visited - len(values)  # every path ends at a leaf, which is not a comparison
+    return total / len(values)
+
+
+def performance_summary(occupancy: pd.DataFrame, environment: pd.DataFrame, models: dict,
+                        X_test: pd.DataFrame, repeats: int = 3) -> pd.DataFrame:
+    """
+    Collect run times, operation counts and arithmetic intensity in one table.
+
+    Parameters
+    ----------
+    occupancy, environment : pandas.DataFrame
+        Outputs of :func:`load_occupancy` and :func:`load_environmental`.
+    models : dict
+        ``{name: fitted model}``.
+    X_test : pandas.DataFrame
+        Test features, used to count tree comparisons.
+    repeats : int, optional
+        Timed runs per alignment method. Defaults to 3.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns ``item``, ``value`` and ``unit``.
+    """
+    rows = []
+    for _, r in benchmark_alignment(occupancy, environment, repeats).iterrows():
+        rows += [{"item": f"{r['method']}: run time", "value": r["median_time_s"], "unit": "s"},
+                 {"item": f"{r['method']}: windows", "value": r["windows"], "unit": "windows"}]
+    n_readings = occupancy["collecteddate"].nunique()
+    est = alignment_flop_estimate(n_readings, len(environment))
+    rows += [{"item": "Final alignment: estimated operations", "value": est["flops"], "unit": "operations"},
+             {"item": "Final alignment: estimated memory traffic", "value": est["bytes"], "unit": "bytes"},
+             {"item": "Final alignment: arithmetic intensity", "value": est["arithmetic_intensity"], "unit": "operations/byte"}]
+    for name, model in models.items():
+        if hasattr(model, "estimators_"):
+            rows.append({"item": f"{name}: comparisons per prediction",
+                         "value": tree_comparisons_per_prediction(model, X_test), "unit": "comparisons"})
+        elif name.startswith("Polynomial"):
+            rows.append({"item": f"{name}: operations per prediction",
+                         "value": polynomial_flops_per_prediction(X_test.shape[1]), "unit": "operations"})
+    return pd.DataFrame(rows)
+
+
+def profile_pipeline(data_dir: str | Path = DEFAULT_DATA_DIR, output_dir: str | Path = DEFAULT_OUTPUT_DIR,
+                     tune: bool = False, top: int = 30) -> Path:
+    """
+    Run :func:`main` under cProfile and save a report of the slowest functions.
+
+    Parameters
+    ----------
+    data_dir, output_dir : str or pathlib.Path, optional
+        Passed to :func:`main`.
+    tune : bool, optional
+        Include Random Forest tuning. Defaults to False.
+    top : int, optional
+        Number of functions to list. Defaults to 30.
+
+    Returns
+    -------
+    pathlib.Path
+        Path of the report, ``output_dir/profile_report.txt``. It lists this
+        module's functions by cumulative time (time spent in the function and
+        everything it calls), then all functions by their own time. Waiting
+        time of parallel worker threads is excluded from the first list, which
+        makes the project's hotspots easier to read.
+
+    Examples
+    --------
+    From the command line::
+
+        python src/occupancy_model.py --no-tune --profile
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    profiler = cProfile.Profile()
+    profiler.runcall(main, data_dir, output_dir, tune)
+    report = output_dir / "profile_report.txt"
+    with open(report, "w", encoding="utf-8") as fh:
+        stats = pstats.Stats(profiler, stream=fh).strip_dirs()
+        fh.write("=== Project functions by cumulative time ===\n")
+        stats.sort_stats("cumulative").print_stats(r"occupancy_model", top)
+        fh.write("\n=== All functions by own (internal) time ===\n")
+        stats.sort_stats("tottime").print_stats(top)
+    logger.info("Profile saved to %s", report)
+    return report
+
+
+# ---------------------------------------------------------------------------
+# 6. Visualisation
 # ---------------------------------------------------------------------------
 
 def _save(fig: plt.Figure, path: Path) -> Path:
@@ -1439,7 +1779,7 @@ def plot_predictions(predictions: pd.DataFrame, model_name: str, path: Path) -> 
 
 
 # ---------------------------------------------------------------------------
-# 6. Main pipeline
+# 7. Main pipeline
 # ---------------------------------------------------------------------------
 
 def main(data_dir: str | Path = DEFAULT_DATA_DIR, output_dir: str | Path = DEFAULT_OUTPUT_DIR,
@@ -1482,6 +1822,10 @@ def main(data_dir: str | Path = DEFAULT_DATA_DIR, output_dir: str | Path = DEFAU
     - ``feature_importance_ranking.csv``: ranking of the variables.
     - ``rf_tuning_cv_results.csv``: cross-validation results for every
       Random Forest setting (only when ``tune=True``).
+    - ``stage_timings.csv``: wall-clock time of each pipeline stage.
+    - ``performance_summary.csv``: alignment run times (final vs original
+      method), estimated operations and arithmetic intensity, and operations
+      per prediction for each model.
     - ``figures/*.png``: time series, correlation heatmap, polynomial fit,
       predicted vs actual, tree convergence (``tune=True``), sensitivity and
       predictions over time.
@@ -1503,6 +1847,15 @@ def main(data_dir: str | Path = DEFAULT_DATA_DIR, output_dir: str | Path = DEFAU
     fig_dir = output_dir / "figures"
     fig_dir.mkdir(parents=True, exist_ok=True)
     start = time.perf_counter()
+    stage_times = {}
+    mark = time.perf_counter()
+
+    def record(stage: str) -> None:
+        """Store the time since the previous stage finished."""
+        nonlocal mark
+        now = time.perf_counter()
+        stage_times[stage] = now - mark
+        mark = now
 
     # 1. Load data
     occupancy = load_occupancy(data_dir / OCCUPANCY_FILE)
@@ -1511,11 +1864,13 @@ def main(data_dir: str | Path = DEFAULT_DATA_DIR, output_dir: str | Path = DEFAU
     location = registry.loc[registry["ID_str"] == str(ENV_SENSOR_ID), ["Building", "Floor/Room", "Area"]]
     if not location.empty:
         logger.info("Sensor %s is registered in: %s", ENV_SENSOR_ID, location.iloc[0].to_dict())
+    record("Load and parse data")
 
     # 2. Align and split
     readings, dataset, features = build_modelling_dataset(occupancy, environment)
     X_train, X_test, y_train, y_test = split_dataset(dataset, features)
     logger.info("Training readings: %d | test readings: %d", len(X_train), len(X_test))
+    record("Align and split")
 
     # 3. Baseline and alternative models
     models = {
@@ -1525,6 +1880,7 @@ def main(data_dir: str | Path = DEFAULT_DATA_DIR, output_dir: str | Path = DEFAU
     }
     for model in models.values():
         model.fit(X_train, y_train)
+    record("Train baseline and alternative models")
 
     # 4. Tune the Random Forest
     if tune:
@@ -1532,6 +1888,7 @@ def main(data_dir: str | Path = DEFAULT_DATA_DIR, output_dir: str | Path = DEFAU
         plot_tree_convergence(convergence, n_trees, fig_dir / "rf_tree_convergence.png")
         models["Random Forest (Tuned)"], cv_results = tune_random_forest(X_train, y_train, n_trees)
         cv_results.to_csv(output_dir / "rf_tuning_cv_results.csv", index=False)
+        record("Tune Random Forest")
 
     # 5. Compare and select the final model
     comparison, test_predictions = compare_models(models, X_train, X_test, y_train, y_test, fit=False)
@@ -1540,6 +1897,13 @@ def main(data_dir: str | Path = DEFAULT_DATA_DIR, output_dir: str | Path = DEFAU
         lambda m: "Baseline" if m.startswith("Polynomial") else "Final model" if m == final_name else "Alternative")
     comparison.to_csv(output_dir / "model_performance_metrics.csv", index=False)
     logger.info("Final model: %s\n%s", final_name, comparison.round(4).to_string(index=False))
+    record("Compare models (including repeated timing runs)")
+
+    # Performance analysis: alignment timing, operation counts, arithmetic intensity
+    performance = performance_summary(occupancy, environment, models, X_test)
+    performance.to_csv(output_dir / "performance_summary.csv", index=False)
+    logger.info("Performance summary:\n%s", performance.to_string(index=False))
+    record("Performance analysis")
 
     # 6. Sensitivity analysis and feature ranking
     split_results = split_sensitivity(final_model, dataset[features], dataset["avg_headcount"])
@@ -1549,6 +1913,7 @@ def main(data_dir: str | Path = DEFAULT_DATA_DIR, output_dir: str | Path = DEFAU
     ranking = rank_features(final_model, sensitivity, X_train, y_train)
     ranking.to_csv(output_dir / "feature_importance_ranking.csv", index=False)
     logger.info("Feature ranking:\n%s", ranking[["Overall rank", "Variable"]].to_string(index=False))
+    record("Sensitivity analyses and ranking")
 
     # 7. Predict headcount for every reading
     predictions = predict_headcount(final_model, readings, features,
@@ -1560,6 +1925,7 @@ def main(data_dir: str | Path = DEFAULT_DATA_DIR, output_dir: str | Path = DEFAU
     logger.info("Unlabelled readings: %d | outside training period: %d | outside training range: %d",
                 len(unlabelled), unlabelled["outside_training_period"].sum(),
                 unlabelled["outside_training_range"].sum())
+    record("Predict headcount")
 
     # 8. Figures
     plot_time_series(dataset, features, fig_dir / "time_series.png")
@@ -1569,6 +1935,10 @@ def main(data_dir: str | Path = DEFAULT_DATA_DIR, output_dir: str | Path = DEFAU
     plot_predicted_vs_actual(y_test, test_predictions, fig_dir / "predicted_vs_actual.png")
     plot_sensitivity(sensitivity, final_name, fig_dir / "sensitivity_analysis.png")
     plot_predictions(predictions, final_name, fig_dir / "predicted_headcount_time_series.png")
+    record("Figures")
+    timings = pd.DataFrame({"stage": list(stage_times), "time_s": list(stage_times.values())})
+    timings.to_csv(output_dir / "stage_timings.csv", index=False)
+    logger.info("Stage timings:\n%s", timings.round(2).to_string(index=False))
 
     logger.info("Strongest predictor of occupancy: %s", ranking.loc[0, "Variable"])
     logger.info("Finished in %.0f s. Outputs saved to %s", time.perf_counter() - start, output_dir.resolve())
@@ -1581,10 +1951,15 @@ if __name__ == "__main__":
     parser.add_argument("--data-dir", default=DEFAULT_DATA_DIR, help="folder containing the input data files")
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="folder for output tables and figures")
     parser.add_argument("--no-tune", action="store_true", help="skip Random Forest tuning (faster)")
+    parser.add_argument("--profile", action="store_true",
+                        help="run under cProfile and save outputs/profile_report.txt")
     args = parser.parse_args()
 
     # Render figures straight to files. This is set only when the script is run
     # directly, so importing the module into a notebook keeps inline plots.
     matplotlib.use("Agg")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s", datefmt="%H:%M:%S")
-    main(args.data_dir, args.output_dir, tune=not args.no_tune)
+    if args.profile:
+        profile_pipeline(args.data_dir, args.output_dir, tune=not args.no_tune)
+    else:
+        main(args.data_dir, args.output_dir, tune=not args.no_tune)

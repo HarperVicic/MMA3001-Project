@@ -7,3 +7,5 @@ scikit-learn
 openpyxl
 ipykernel
 pdoc
+pytest
+pytest-html
